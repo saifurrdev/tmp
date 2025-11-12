@@ -1,0 +1,91 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="glass rounded-3xl p-8 shadow-glass">
+  <h2 class="text-2xl font-semibold">CC Checker</h2>
+  <div class="grid md:grid-cols-3 gap-4 mt-4">
+    <div class="md:col-span-1">
+      <label class="block mb-1 text-sm text-slate-300">Auth</label>
+      <select id="auth" class="w-full px-4 py-2 rounded-xl bg-white/5 border border-white/10">
+        {% for p in providers %}
+          <option value="{{p.name}}">{{p.name}}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="md:col-span-2">
+      <label class="block mb-1 text-sm text-slate-300">Paste CCs (one per line, 16dgt|mm|yy|3dgt)</label>
+      <textarea id="ssids" class="w-full px-4 py-2 rounded-xl bg-white/5 border border-white/10 min-h-[160px]" placeholder="1234567890123456|08|27|123"></textarea>
+    </div>
+  </div>
+  <div class="mt-4 flex items-center gap-3">
+    <button class="px-4 py-2 rounded-xl bg-slate-900 border border-white/10 hover:border-white/20" onclick="startCheck()">Check Now</button>
+    <div class="text-xs bg-white/5 border border-white/10 rounded-full px-3 py-1">
+      <span class="text-emerald-300">Approved:</span> <span id="fCount">0</span>
+      <span class="mx-2">|</span>
+      <span class="text-rose-300">Declined:</span> <span id="nCount">0</span>
+      <span class="mx-2">|</span>
+      <span>Processed:</span> <span id="pCount">0</span>/<span id="tCount">0</span>
+    </div>
+  </div>
+
+  <div class="mt-5 glass rounded-2xl p-4">
+    <h3 class="font-semibold mb-2">Live Results</h3>
+    <table class="w-full">
+      <thead class="text-slate-400 text-sm"><tr><th class="text-left py-2">#</th><th class="text-left">CC</th><th class="text-left">Status</th></tr></thead>
+      <tbody id="rows" class="text-sm"></tbody>
+    </table>
+  </div>
+
+  <div id="final" class="hidden mt-5 glass rounded-2xl p-4">
+    <h3 class="font-semibold mb-2">Summary</h3>
+    <pre id="summary" class="whitespace-pre-wrap text-xs"></pre>
+  </div>
+</div>
+<script>
+let evtSrc=null;
+async function startCheck(){
+  if(evtSrc){ try{evtSrc.close()}catch(e){} }
+  const auth=document.getElementById('auth').value;
+  const lines=document.getElementById('ssids').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  document.getElementById('tCount').innerText=lines.length;
+  document.getElementById('fCount').innerText=0;
+  document.getElementById('nCount').innerText=0;
+  document.getElementById('pCount').innerText=0;
+  document.getElementById('rows').innerHTML='';
+  document.getElementById('final').classList.add('hidden');
+  const payload={ssids: lines};
+  const r=await fetch('/api/ssid/check/stream?auth='+encodeURIComponent(auth), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const reader=r.body.getReader();
+  let decoder=new TextDecoder();
+  let buffer='';
+  let rowIndex=0;
+  function handleObj(obj){
+    if(obj.event==='found' || obj.event==='not_found'){
+      rowIndex++;
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td class='py-1'>${rowIndex}</td><td class='py-1'>${obj.ssid}</td><td class='py-1 ${obj.event==='found'?'text-emerald-300':'text-rose-300'}'>${obj.event==='found'?'Approved':'Declined'}</td>`;
+      document.getElementById('rows').append(tr);
+      document.getElementById('fCount').innerText=obj.found_count;
+      document.getElementById('nCount').innerText=obj.not_found_count;
+      document.getElementById('pCount').innerText=obj.processed;
+    } else if(obj.event==='done'){
+      document.getElementById('final').classList.remove('hidden');
+      document.getElementById('summary').textContent=JSON.stringify(obj, null, 2);
+    } else if(obj.event==='error'){
+      alert(obj.message||'Error');
+    }
+  }
+  while(true){
+    const {value, done}=await reader.read();
+    if(done) break;
+    buffer += decoder.decode(value, {stream:true});
+    let parts = buffer.split("\n\n");
+    while(parts.length>1){
+      const chunk = parts.shift();
+      const line = chunk.replace(/^data:\s*/,'').trim();
+      try{ const obj=JSON.parse(line); handleObj(obj); }catch(e){}
+    }
+    buffer = parts[0];
+  }
+}
+</script>
+{% endblock %}
